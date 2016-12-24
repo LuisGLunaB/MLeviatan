@@ -1,5 +1,4 @@
 import numpy as np
-import weakref
 import math
 
 data = np.genfromtxt('casas.csv',delimiter=',')
@@ -81,8 +80,8 @@ class DefaultModeler(object):
 
 class ForwardPassPredictor(object):
     """Matrix multiplication predictor"""
-    def __init__(self):
-        self.parent = None
+    def __init__(self, parent = None ):
+        self.parent = parent
     def Predict(self,X = None):
         if X is None: X = self.parent.Xtrain
         Prediction = X.dot(self.parent.Modeler.w)
@@ -90,21 +89,23 @@ class ForwardPassPredictor(object):
 
 class NormalEquationLearner(object):
     """Normal Equation Learner for Linear Regression"""
-    def __init__(self):
-        self.parent = None
+    def __init__(self, parent = None ):
+        self.parent = parent
     def Learn(self):
         #Learning
-        self.Xtranspose = self.parent.Xtrain.transpose()
-        self.w = np.linalg.inv( (self.Xtranspose.dot(self.parent.Xtrain)) ).dot( self.Xtranspose.dot(self.parent.Ytrain) )
+        Xtranspose = self.parent.Xtrain.transpose()
+        self.w = np.linalg.inv( (Xtranspose.dot(self.parent.Xtrain)) ).dot( Xtranspose.dot(self.parent.Ytrain) )
         #Take model from the learning
         Modeler = DefaultModeler()
         Modeler.w = self.w
         return Modeler
 
 # Linear Regression Object
-class LinearRegression(object):
-    """Linear Regression Model"""
-    def __init__(self, Xtrain = None, Ytrain = None, Xvalidate = None, Yvalidate = None , ErrorFunction = RMSE ):
+class DefaultML(object):
+    """Default Machine Learning Model"""
+    def __init__(self, Xtrain = None, Ytrain = None, Xvalidate = None, Yvalidate = None ):
+        self.Name = "Default Machine Learning Model"
+        self.Alias = ""
         self.Xtrain = Xtrain
         self.Ytrain = Ytrain
         self.Xvalidate = Ytrain
@@ -118,10 +119,24 @@ class LinearRegression(object):
         self.TrainingPrediction = None
         self.ValidationPrediction = None
 
-        self.ErrorFunction = ErrorFunction
+        self.ErrorFunction = None
         self.Error = None
         self.TrainError = None
         self.ValidateError = None
+
+    def describe(self):
+        print "\n" + self.Name +"("+self.Alias+"):","\n"
+
+        print "Modeler:" , type(self.Modeler).__name__
+        print "Predictor:" , type(self.Predictor).__name__,"\n"
+
+        print self.ErrorFunction.__name__ ,"Error:" , self.Error
+        print self.ErrorFunction.__name__ ,"Train error:" , self.TrainError
+        print self.ErrorFunction.__name__ ,"Validation error:" , self.ValidateError,"\n"
+
+        print "Model:\n" , self.GetModel(),"\n"
+
+        print "Learning setup:\n" , self.GetLearning()
 
     def SetLearner(self,LearnerObject):
         self.Learner = LearnerObject
@@ -132,6 +147,16 @@ class LinearRegression(object):
         self.Predictor = PredictorObject
         self.Predictor.parent = self
 
+    def GetModel(self):
+        if self.Modeler is None: self.Learn()
+        return self.Modeler.__dict__
+    def GetLearning(self):
+        string = "Algorithm: " + type(self.Learner).__name__ + "\n"
+        setup = self.Learner.__dict__
+        for (key,value) in setup.iteritems():
+            if not key == "parent" and not key == "w":
+                string = "" + key + ": ",value
+        return string
     def Collect(self):
         if self.Prediction is None: self.Predict()
         return self.Prediction
@@ -161,22 +186,26 @@ class LinearRegression(object):
         self.ValidateError = self.ErrorFunction(self.ValidationPrediction,self.Yvalidate)
         return self.ValidateError
 
+class LinearRegression(DefaultML):
+    def __init__(self, Xtrain = None, Ytrain = None, Xvalidate = None, Yvalidate = None ):
+        """Linear Regression Model"""
+        DefaultML.__init__(self, Xtrain, Ytrain, Ytrain, Yvalidate)
+        self.Name = "Linear Regression Model"
+        self.Alias = ""
+        self.Modeler = None
+        self.Learner = NormalEquationLearner(self)
+        self.Predictor = ForwardPassPredictor(self)
+        self.ErrorFunction = RMSE
+
 #np.random.shuffle(data)
 ( Dtrain , Dvalidate , Itrain , Ivalidate ) = split_holdout(data)
 ( Xtrain , Ytrain ) = split_X_Y( Dtrain )
 ( Xvalidate , Yvalidate ) = split_X_Y( Dvalidate )
 
+#LR Example
 ( X , Y ) = split_X_Y( data )
-
 LR = LinearRegression( X, Y )
-FP = ForwardPassPredictor()
-LR.SetPredictor(FP)
-
-NE = NormalEquationLearner()
-LR.SetLearner(NE)
-
-LR.Learn()
-Modelo = LR.Modeler
-LR.SetModeler(Modelo)
-
-print LR.Predict()
+Error = LR.Evaluate()
+Prediction = LR.Predict()
+LR.describe()
+print Prediction
