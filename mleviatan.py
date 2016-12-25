@@ -1,9 +1,6 @@
 import numpy as np
 import math
 
-data = np.genfromtxt('casas.csv',delimiter=',')
-#data = np.matrix(data)
-
 # Debugging and Optimization
 def get_data_base(arr):
     '''
@@ -64,8 +61,45 @@ def split_holdout( data , p = 0.3 , shuffle = False):
         Dvalidate = data[ 0:split , : ]
 
     return (Dtrain,Dvalidate,Itrain,Ivalidate)
+def split_Kfolds( data , K , i = 1 ):
+    (m , a) = data.shape
+    N = int(math.floor(m/K))
 
-# Common Error functions
+    Ivalidate = np.arange( ((i-1)*N) , (i*N) )
+    Dvalidate = np.take(data, Ivalidate, axis=0)
+
+    Itrain =  np.append( np.arange(0,(i-1)*N) , np.arange((i*N) , (N*K)) )
+    Dtrain = np.take( data , Itrain, axis=0)
+
+    return (Dtrain,Dvalidate,Itrain,Ivalidate)
+
+def split_leave1out( data , x = 0 , m = None ):
+    if m is None: (m , a) = data.shape
+
+    Ivalidate = np.array([x])
+    Dvalidate = np.take(data, Ivalidate, axis=0)
+
+    Itrain =  np.append( np.arange(0,x) , np.arange((x+1),m) )
+    Dtrain = np.take( data , Itrain, axis=0)
+
+    return (Dtrain,Dvalidate,Itrain,Ivalidate)
+def XV_leave1out( X , Y , MLmodel ):
+    (m , n) = X.shape
+    ErrorTrain = np.empty([m, 1])
+    ErrorValidate = np.empty([m, 1])
+    Models =  ([None] * m)
+    for i in list(range(m)):
+        ( MLmodel.Xtrain , MLmodel.Xvalidate , _ , _ ) = split_leave1out( X , i , m )
+        ( MLmodel.Ytrain , MLmodel.Yvalidate, _ , _ ) = split_leave1out( Y , i , m )
+        ( ErrorTrain[i][0] , ErrorValidate[i][0] ) = MLmodel.EvaluateXV( True )
+        Models[i] = MLmodel.GetModel()
+        #print i , MLmodel.GetModel()
+        #print i , ErrorTrain[i][0] , ErrorValidate[i][0]
+    Train = ErrorTrain.mean()
+    Validate = ErrorValidate.mean()
+    return ( Train, Validate, ErrorTrain, ErrorValidate , Models)
+
+# Error Functions
 def MAD(P,Y):
     return np.mean(np.absolute(P-Y))
 def MSE(P,Y):
@@ -77,7 +111,6 @@ class DefaultModeler(object):
     """Empty Modeler"""
     def __init__(self):
         pass
-
 class ForwardPassPredictor(object):
     """Matrix multiplication predictor"""
     def __init__(self, parent = None ):
@@ -86,7 +119,6 @@ class ForwardPassPredictor(object):
         if X is None: X = self.parent.Xtrain
         Prediction = X.dot(self.parent.Modeler.w)
         return Prediction
-
 class NormalEquationLearner(object):
     """Normal Equation Learner for Linear Regression"""
     def __init__(self, parent = None ):
@@ -100,7 +132,8 @@ class NormalEquationLearner(object):
         Modeler.w = self.w
         return Modeler
 
-# Linear Regression Object
+# Machine Learning Algorithms Classes
+# np.concatenate( (Train,Test) , axis=1)
 class DefaultML(object):
     """Default Machine Learning Model"""
     def __init__(self, Xtrain = None, Ytrain = None, Xvalidate = None, Yvalidate = None ):
@@ -139,17 +172,15 @@ class DefaultML(object):
         print "Learning setup:\n" , self.GetLearning()
 
     def SetLearner(self,LearnerObject):
-        self.Learner = LearnerObject
-        self.Learner.parent = self
+        self.Learner = LearnerObject(self)
     def SetModeler(self,ModelerObject):
         self.Modeler = ModelerObject
     def SetPredictor(self,PredictorObject):
-        self.Predictor = PredictorObject
-        self.Predictor.parent = self
+        self.Predictor = PredictorObject(self)
 
     def GetModel(self):
         if self.Modeler is None: self.Learn()
-        return self.Modeler.__dict__
+        return (self.Modeler.__dict__)
     def GetLearning(self):
         string = "Algorithm: " + type(self.Learner).__name__ + "\n"
         setup = self.Learner.__dict__
@@ -157,35 +188,41 @@ class DefaultML(object):
             if not key == "parent" and not key == "w":
                 string = "" + key + ": ",value
         return string
-    def Collect(self):
-        if self.Prediction is None: self.Predict()
-        return self.Prediction
 
     def Learn(self):
         self.Modeler = self.Learner.Learn()
 
-    def Predict(self):
-        if self.Modeler is None: self.Learn()
-        self.Prediction = self.Predictor.Predict()
+    def Predict(self,learn = False):
+        if self.Modeler is None or learn: self.Learn()
+        self.Prediction = self.Predictor.Predict(self.Xtrain)
         return self.Prediction
-    def PredictTrain(self):
+    def PredictTrain(self, learn = False):
+        if learn: self.Learn()
         self.TrainingPrediction = self.Predictor.Predict(self.Xtrain)
         return self.TrainingPrediction
     def PredictValidate(self):
         self.ValidationPrediction = self.Predictor.Predict(self.Xvalidate)
         return self.ValidationPrediction
-
-    def Evaluate(self):
-        if self.Prediction is None: self.Predict()
+    def PredictXV(self,learn = False):
+        self.PredictTrain(learn)
+        self.PredictValidate()
+        return ( self.TrainingPrediction , self.ValidationPrediction )
+    def Evaluate(self, learn = False , predict = True):
+        if self.Prediction is None or learn or predict: self.Predict(learn)
         self.Error = self.ErrorFunction(self.Prediction,self.Ytrain)
         return self.Error
-    def EvaluateTrain(self):
+    def EvaluateTrain(self, learn = False, predict = True ):
+        if predict: self.PredictTrain(learn)
         self.TrainError = self.ErrorFunction(self.TrainingPrediction,self.Ytrain)
         return self.TrainError
-    def EvaluateValidate(self):
+    def EvaluateValidate(self, predict = True ):
+        if predict: self.PredictValidate()
         self.ValidateError = self.ErrorFunction(self.ValidationPrediction,self.Yvalidate)
         return self.ValidateError
-
+    def EvaluateXV(self, learn = False, predict = True ):
+        self.EvaluateTrain(learn, predict)
+        self.EvaluateValidate(predict)
+        return (self.TrainError,self.ValidateError)
 class LinearRegression(DefaultML):
     def __init__(self, Xtrain = None, Ytrain = None, Xvalidate = None, Yvalidate = None ):
         """Linear Regression Model"""
@@ -197,6 +234,7 @@ class LinearRegression(DefaultML):
         self.Predictor = ForwardPassPredictor(self)
         self.ErrorFunction = RMSE
 
+data = np.genfromtxt('casas.csv',delimiter=',')
 #np.random.shuffle(data)
 ( Dtrain , Dvalidate , Itrain , Ivalidate ) = split_holdout(data)
 ( Xtrain , Ytrain ) = split_X_Y( Dtrain )
@@ -205,7 +243,6 @@ class LinearRegression(DefaultML):
 #LR Example
 ( X , Y ) = split_X_Y( data )
 LR = LinearRegression( X, Y )
-Error = LR.Evaluate()
-Prediction = LR.Predict()
-LR.describe()
-print Prediction
+
+(Train, Test ,_,_,_) = XV_leave1out( X, Y, LR )
+print Train , Test
