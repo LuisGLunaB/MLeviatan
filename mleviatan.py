@@ -1,5 +1,6 @@
 import numpy as np
 import math
+import matplotlib.pyplot as plt
 
 # Debugging and Optimization
 def get_data_base(arr):
@@ -27,7 +28,29 @@ def split_X_Y( data , n = 1 ):
     X = data[ : , 0:-n ]
     Y = data[ : , -n: ]
     return ( X , Y )
-def split_holdout( data , p = 0.3 , shuffle = False):
+
+def XV_LearningCurve( X , Y , MLmodel, K):
+    ErrorTrain = np.empty([K, 1])
+    ErrorValidate = np.empty([K, 1])
+    Models =  ([None] * K)
+    ErrorTrain[0][0] = None
+    ErrorValidate[0][0] = None
+    ( _ , MLmodel.Xvalidate , _ , _ ) = split_Kfolds( X , K , 1 )
+    ( _ , MLmodel.Yvalidate, _ , _ ) = split_Kfolds( Y , K , 1 )
+    ( _ , MLmodel.Xtrain , _ , _ ) = split_Kfolds( X , K , 2 )
+    ( _ , MLmodel.Ytrain , _ , _ ) = split_Kfolds( Y , K , 2 )
+    ( ErrorTrain[1][0] , ErrorValidate[1][0] ) = MLmodel.EvaluateXV( True )
+    Models[1] = MLmodel.GetModel()
+    for i in list(range(3,K+1)):
+        ( _ , Xtrain , _ , _ ) = split_Kfolds( X , K , i )
+        ( _ , Ytrain , _ , _ ) = split_Kfolds( Y , K , i )
+        MLmodel.Xtrain = np.concatenate( (MLmodel.Xtrain, Xtrain) , axis=0)
+        MLmodel.Ytrain = np.concatenate( (MLmodel.Ytrain, Ytrain) , axis=0)
+        ( ErrorTrain[i-1][0] , ErrorValidate[i-1][0] ) = MLmodel.EvaluateXV( True )
+        Models[i-1] = MLmodel.GetModel()
+    return ( ErrorTrain, ErrorValidate , Models)
+
+def split_holdout( data , p = 0.33 , shuffle = False):
     '''
     Separates datasets into training and crossvalidation sets
     using the Hold-out the method.
@@ -61,6 +84,14 @@ def split_holdout( data , p = 0.3 , shuffle = False):
         Dvalidate = data[ 0:split , : ]
 
     return (Dtrain,Dvalidate,Itrain,Ivalidate)
+def XV_holdout( X , Y , MLmodel, p = 0.33 ):
+    ( MLmodel.Xtrain , MLmodel.Xvalidate , _ , _ ) = split_holdout( X , p )
+    ( MLmodel.Ytrain , MLmodel.Yvalidate, _ , _ ) = split_holdout( Y , p )
+    ( Train , Validate ) = MLmodel.EvaluateXV( True )
+    Models = MLmodel.GetModel()
+
+    return ( Train, Validate, None , None , Models)
+
 def split_Kfolds( data , K , i = 1 ):
     (m , a) = data.shape
     N = int(math.floor(m/K))
@@ -72,6 +103,18 @@ def split_Kfolds( data , K , i = 1 ):
     Dtrain = np.take( data , Itrain, axis=0)
 
     return (Dtrain,Dvalidate,Itrain,Ivalidate)
+def XV_Kfolds( X , Y , MLmodel, K):
+    ErrorTrain = np.empty([K, 1])
+    ErrorValidate = np.empty([K, 1])
+    Models =  ([None] * K)
+    for i in list(range(1,K+1)):
+        ( MLmodel.Xtrain , MLmodel.Xvalidate , _ , _ ) = split_Kfolds( X , K , i )
+        ( MLmodel.Ytrain , MLmodel.Yvalidate, _ , _ ) = split_Kfolds( Y , K , i )
+        ( ErrorTrain[i-1][0] , ErrorValidate[i-1][0] ) = MLmodel.EvaluateXV( True )
+        Models[i-1] = MLmodel.GetModel()
+    Train = ErrorTrain.mean()
+    Validate = ErrorValidate.mean()
+    return ( Train, Validate, ErrorTrain, ErrorValidate , Models)
 
 def split_leave1out( data , x = 0 , m = None ):
     if m is None: (m , a) = data.shape
@@ -93,11 +136,10 @@ def XV_leave1out( X , Y , MLmodel ):
         ( MLmodel.Ytrain , MLmodel.Yvalidate, _ , _ ) = split_leave1out( Y , i , m )
         ( ErrorTrain[i][0] , ErrorValidate[i][0] ) = MLmodel.EvaluateXV( True )
         Models[i] = MLmodel.GetModel()
-        #print i , MLmodel.GetModel()
-        #print i , ErrorTrain[i][0] , ErrorValidate[i][0]
     Train = ErrorTrain.mean()
     Validate = ErrorValidate.mean()
     return ( Train, Validate, ErrorTrain, ErrorValidate , Models)
+
 
 # Error Functions
 def MAD(P,Y):
@@ -244,5 +286,12 @@ data = np.genfromtxt('casas.csv',delimiter=',')
 ( X , Y ) = split_X_Y( data )
 LR = LinearRegression( X, Y )
 
-(Train, Test ,_,_,_) = XV_leave1out( X, Y, LR )
-print Train , Test
+(Train, Test, _ ) = XV_LearningCurve( X, Y, LR, 50)
+
+plt.title('Learning Curve')
+plt.ylabel('Error')
+plt.xlabel('Folds')
+plt.plot(Train[6:], label="Training Error")
+plt.plot(Test[6:], label="Validation Error")
+plt.legend()
+plt.show()
