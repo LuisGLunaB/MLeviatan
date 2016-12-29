@@ -30,25 +30,40 @@ def split_X_Y( data , n = 1 ):
     return ( X , Y )
 
 def XV_LearningCurve( X , Y , MLmodel, K):
-    ErrorTrain = np.empty([K, 1])
-    ErrorValidate = np.empty([K, 1])
-    Models =  ([None] * K)
-    ErrorTrain[0][0] = None
-    ErrorValidate[0][0] = None
+    ErrorTrain = np.empty([K-1, 1])
+    ErrorValidate = np.empty([K-1, 1])
+    Models =  ([None] * (K-1) )
+    i = 2
     ( _ , MLmodel.Xvalidate , _ , _ ) = split_Kfolds( X , K , 1 )
     ( _ , MLmodel.Yvalidate, _ , _ ) = split_Kfolds( Y , K , 1 )
-    ( _ , MLmodel.Xtrain , _ , _ ) = split_Kfolds( X , K , 2 )
-    ( _ , MLmodel.Ytrain , _ , _ ) = split_Kfolds( Y , K , 2 )
-    ( ErrorTrain[1][0] , ErrorValidate[1][0] ) = MLmodel.EvaluateXV( True )
+    ( _ , MLmodel.Xtrain , _ , _ ) = split_Kfolds( X , K , i )
+    ( _ , MLmodel.Ytrain , _ , _ ) = split_Kfolds( Y , K , i )
+    ( ErrorTrain[i-2][0] , ErrorValidate[i-2][0] ) = MLmodel.EvaluateXV( True )
     Models[1] = MLmodel.GetModel()
     for i in list(range(3,K+1)):
         ( _ , Xtrain , _ , _ ) = split_Kfolds( X , K , i )
         ( _ , Ytrain , _ , _ ) = split_Kfolds( Y , K , i )
         MLmodel.Xtrain = np.concatenate( (MLmodel.Xtrain, Xtrain) , axis=0)
         MLmodel.Ytrain = np.concatenate( (MLmodel.Ytrain, Ytrain) , axis=0)
-        ( ErrorTrain[i-1][0] , ErrorValidate[i-1][0] ) = MLmodel.EvaluateXV( True )
-        Models[i-1] = MLmodel.GetModel()
+        ( ErrorTrain[i-2][0] , ErrorValidate[i-2][0] ) = MLmodel.EvaluateXV( True )
+        Models[i-2] = MLmodel.GetModel()
     return ( ErrorTrain, ErrorValidate , Models)
+def XV_LearningCurveN( X , Y , MLmodel, K, it):
+    (m,n) = Y.shape
+    ErrorTrain =  np.zeros((K-1, 1))
+    ErrorValidate =  np.zeros((K-1, 1))
+    for i in list(range(it)):
+        v = np.arange(m)
+        np.random.shuffle(v)
+        Xv = np.take(X, v, axis=0)
+        Yv = np.take(Y, v, axis=0)
+        (Train, Test, _ ) = XV_LearningCurve( Xv , Yv , MLmodel, K)
+        ErrorTrain = ErrorTrain + np.copy(Train)
+        ErrorValidate = ErrorValidate + np.copy(Test)
+    ErrorTrain = (ErrorTrain / it)
+    ErrorValidate = (ErrorValidate / it)
+    return ( np.array(ErrorTrain), np.array(ErrorValidate) )
+
 
 def split_holdout( data , p = 0.33 , shuffle = False):
     '''
@@ -168,7 +183,10 @@ class NormalEquationLearner(object):
     def Learn(self):
         #Learning
         Xtranspose = self.parent.Xtrain.transpose()
-        self.w = np.linalg.inv( (Xtranspose.dot(self.parent.Xtrain)) ).dot( Xtranspose.dot(self.parent.Ytrain) )
+        #self.w = np.linalg.inv( (Xtranspose.dot(self.parent.Xtrain)) ).dot( Xtranspose.dot(self.parent.Ytrain) )
+        #lstsq
+        self.w = np.linalg.lstsq( self.parent.Xtrain, self.parent.Ytrain )
+        self.w = self.w[0]
         #Take model from the learning
         Modeler = DefaultModeler()
         Modeler.w = self.w
@@ -286,7 +304,8 @@ data = np.genfromtxt('casas.csv',delimiter=',')
 ( X , Y ) = split_X_Y( data )
 LR = LinearRegression( X, Y )
 
-(Train, Test, _ ) = XV_LearningCurve( X, Y, LR, 50)
+(Train, Test ) = XV_LearningCurveN( X, Y, LR, 54, 3000)
+
 
 plt.title('Learning Curve')
 plt.ylabel('Error')
