@@ -1,6 +1,7 @@
 import numpy as np
 import math
 import matplotlib.pyplot as plt
+import sys
 
 # Debugging and Optimization
 def get_data_base(arr):
@@ -163,6 +164,8 @@ def MSE(P,Y):
     return np.mean(np.square(P-Y))
 def RMSE(P,Y):
     return ( MSE(P,Y) ) ** 0.5
+def Difference(P,Y):
+    return (Y-P)
 
 class DefaultModeler(object):
     """Empty Modeler"""
@@ -191,6 +194,40 @@ class NormalEquationLearner(object):
         Modeler = DefaultModeler()
         Modeler.w = self.w
         return Modeler
+class LRGradientLearner(object):
+    """Normal Equation Learner for Linear Regression"""
+    def __init__(self, parent = None ):
+        self.parent = parent
+        self.ErrFunction = Difference
+        self.Init_size = 1
+        self.it = 100
+        self.a = 0.1
+        self.Show = True
+    def Learn(self):
+        #it = set
+        #a = set
+        self.HistT = np.zeros((self.it, 1))
+        self.HistV = np.zeros((self.it, 1))
+        Xtranspose = self.parent.Xtrain.transpose()
+        Y = self.parent.Ytrain
+        (_,n) = X.shape
+        (_,o) = Y.shape
+        self.parent.Modeler = DefaultModeler()
+        self.parent.Modeler.w = np.array( np.random.random_sample((n, o)) ) * self.Init_size
+
+        for i in list(range(self.it)):
+            self.HistT[i] = self.parent.EvaluateTrain()
+            self.HistV[i] = self.parent.EvaluateValidate()
+            Err = self.ErrFunction(self.parent.TrainingPrediction,Y)
+            self.g = Xtranspose.dot(Err)
+            self.parent.Modeler.w = self.parent.Modeler.w + ( self.g * self.a)
+            if self.Show:
+                if i == 0:
+                    print "Learning ({0} of {1}): T:{2} V:{3}".format(i+1,self.it,self.HistT[i] ,self.HistV[i] )
+                else:
+                    print "\rLearning ({0} of {1}): T:{2} V:{3}".format(i+1,self.it,self.HistT[i] ,self.HistV[i] ),
+        if self.Show: print ""
+        return self.parent.Modeler
 
 # Machine Learning Algorithms Classes
 # np.concatenate( (Train,Test) , axis=1)
@@ -201,7 +238,7 @@ class DefaultML(object):
         self.Alias = ""
         self.Xtrain = Xtrain
         self.Ytrain = Ytrain
-        self.Xvalidate = Ytrain
+        self.Xvalidate = Xvalidate
         self.Yvalidate = Yvalidate
 
         self.Learner = None
@@ -286,7 +323,7 @@ class DefaultML(object):
 class LinearRegression(DefaultML):
     def __init__(self, Xtrain = None, Ytrain = None, Xvalidate = None, Yvalidate = None ):
         """Linear Regression Model"""
-        DefaultML.__init__(self, Xtrain, Ytrain, Ytrain, Yvalidate)
+        DefaultML.__init__(self, Xtrain, Ytrain, Xvalidate, Yvalidate)
         self.Name = "Linear Regression Model"
         self.Alias = ""
         self.Modeler = None
@@ -302,11 +339,16 @@ data = np.genfromtxt('casas.csv',delimiter=',')
 
 #LR Example
 ( X , Y ) = split_X_Y( data )
-LR = LinearRegression( X, Y )
+LR = LinearRegression( Xtrain, Ytrain, Xvalidate , Yvalidate)
+LR.SetLearner(LRGradientLearner)
+LR.Learner.it = 10000
+LR.Learner.a = 0.0000002
+LR.Learner.Learn()
 
-(Train, Test ) = XV_LearningCurveN( X, Y, LR, 54, 3000)
+print LR.Evaluate()
 
-
+'''
+#(Train, Test ) = XV_LearningCurveN( X, Y, LR, 54, 3000)
 plt.title('Learning Curve')
 plt.ylabel('Error')
 plt.xlabel('Folds')
@@ -314,3 +356,4 @@ plt.plot(Train[6:], label="Training Error")
 plt.plot(Test[6:], label="Validation Error")
 plt.legend()
 plt.show()
+'''
