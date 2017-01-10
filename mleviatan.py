@@ -15,6 +15,12 @@ def get_data_base(arr):
     return base
 def is_same(x, y):
     return get_data_base(x) is get_data_base(y)
+def printp(i,it,TrainingError,ValidationError,running = True):
+    text = "Learning ({0} of {1}): T:{2} V:{3}".format( i+1 ,it,TrainingError,ValidationError)
+    if not running or i == 0:
+        print text
+    else:
+        print "\r" , text ,
 
 # Data Wrangling and Preparation
 def split_X_Y( data , n = 1 ):
@@ -29,7 +35,6 @@ def split_X_Y( data , n = 1 ):
     X = data[ : , 0:-n ]
     Y = data[ : , -n: ]
     return ( X , Y )
-
 def XV_LearningCurve( X , Y , MLmodel, K):
     ErrorTrain = np.empty([K-1, 1])
     ErrorValidate = np.empty([K-1, 1])
@@ -64,7 +69,6 @@ def XV_LearningCurveN( X , Y , MLmodel, K, it):
     ErrorTrain = (ErrorTrain / it)
     ErrorValidate = (ErrorValidate / it)
     return ( np.array(ErrorTrain), np.array(ErrorValidate) )
-
 
 def split_holdout( data , p = 0.33 , shuffle = False):
     '''
@@ -155,7 +159,18 @@ def XV_leave1out( X , Y , MLmodel ):
     Train = ErrorTrain.mean()
     Validate = ErrorValidate.mean()
     return ( Train, Validate, ErrorTrain, ErrorValidate , Models)
+def add_constant(X):
+    (m,_) = X.shape
+    ones =  np.ones((m, 1))
+    return np.concatenate( (ones,X) , axis=1)
+def rem_constant(X):
+    return X[:,1:]
 
+def Normalize(X, mean = None, std = None):
+    if mean is None: mean = X.mean(axis = 0)
+    if std  is None: std = X.std(axis = 0)
+    deviation = X - mean
+    return ( np.divide(deviation,std) , mean , std )
 
 # Error Functions
 def MAD(P,Y):
@@ -200,34 +215,65 @@ class LRGradientLearner(object):
         self.parent = parent
         self.ErrFunction = Difference
         self.Init_size = 1
-        self.it = 100
+        self.it = 1000
         self.a = 0.1
         self.Show = True
+        self.Convergence = 0.0000001
+        self.hasConstant = True
     def Learn(self):
-        #it = set
-        #a = set
+
         self.HistT = np.zeros((self.it, 1))
         self.HistV = np.zeros((self.it, 1))
-        Xtranspose = self.parent.Xtrain.transpose()
         Y = self.parent.Ytrain
-        (_,n) = X.shape
+        Xtranspose = self.parent.Xtrain.transpose()
+        (n,_) = Xtranspose.shape
         (_,o) = Y.shape
         self.parent.Modeler = DefaultModeler()
-        self.parent.Modeler.w = np.array( np.random.random_sample((n, o)) ) * self.Init_size
 
+
+        #Iniciar con ventaja
+        #if self.hasConstant: self.parent.Modeler.w[0,:] = Y.mean(axis = 0)
+
+        alpha = 0.00000000001
+        self.parent.Modeler.w = np.array( np.random.random_sample((n, o)) ) * self.Init_size
+        if self.hasConstant: self.parent.Modeler.w[0,:] = Y.mean(axis = 0)
+        trialw = self.parent.Modeler.w
+        trialError = self.parent.EvaluateTrain()
+        trialA = self.ErrFunction(self.parent.TrainingPrediction,Y)
+        trialgradient = Xtranspose.dot(trialA)
+        for i in list(range(41)):
+            self.parent.Modeler.w = trialw + trialgradient * alpha
+            trialError1 = self.parent.EvaluateTrain()
+            trialError1 =  (trialError - trialError1) * 10
+
+            self.parent.Modeler.w = trialw + (trialgradient * (alpha * 10) )
+            trialError10 = self.parent.EvaluateTrain()
+            trialError10 =  (trialError - trialError10)
+
+            trialRate = trialError10/abs(trialError1)
+            #print i , alpha , trialRate
+            if trialRate <= 0 :
+                self.a = alpha
+                print "Learning Rate:", alpha
+                break
+            alpha = alpha * 2
+
+        self.parent.Modeler.w = trialw
         for i in list(range(self.it)):
             self.HistT[i] = self.parent.EvaluateTrain()
             self.HistV[i] = self.parent.EvaluateValidate()
-            Err = self.ErrFunction(self.parent.TrainingPrediction,Y)
-            self.g = Xtranspose.dot(Err)
-            self.parent.Modeler.w = self.parent.Modeler.w + ( self.g * self.a)
-            if self.Show:
-                if i == 0:
-                    print "Learning ({0} of {1}): T:{2} V:{3}".format(i+1,self.it,self.HistT[i] ,self.HistV[i] )
-                else:
-                    print "\rLearning ({0} of {1}): T:{2} V:{3}".format(i+1,self.it,self.HistT[i] ,self.HistV[i] ),
-        if self.Show: print ""
+            A = self.ErrFunction(self.parent.TrainingPrediction,Y)
+            self.gradient = ( Xtranspose.dot(A) * self.a)
+            self.parent.Modeler.w = self.parent.Modeler.w + self.gradient
+
+            if self.Show: printp( i, self.it, self.HistT[i] ,self.HistV[i] , True )
+
+
+            if i > 1 :
+                Improvement = -((self.HistT[i] / self.HistT[i-1]) - 1)
+                if self.Convergence > Improvement : break
         return self.parent.Modeler
+
 
 # Machine Learning Algorithms Classes
 # np.concatenate( (Train,Test) , axis=1)
@@ -331,21 +377,27 @@ class LinearRegression(DefaultML):
         self.Predictor = ForwardPassPredictor(self)
         self.ErrorFunction = RMSE
 
-data = np.genfromtxt('casas.csv',delimiter=',')
 #np.random.shuffle(data)
+#Prepare Data
+data = np.genfromtxt('casas.csv',delimiter=',')
 ( Dtrain , Dvalidate , Itrain , Ivalidate ) = split_holdout(data)
 ( Xtrain , Ytrain ) = split_X_Y( Dtrain )
 ( Xvalidate , Yvalidate ) = split_X_Y( Dvalidate )
 
+#Normalize
+(Xtrain, mean , std ) = Normalize(Xtrain)
+(Xvalidate, _ , _ ) = Normalize(Xvalidate, mean, std)
+Xtrain = add_constant(Xtrain)
+Xvalidate = add_constant(Xvalidate)
+
 #LR Example
-( X , Y ) = split_X_Y( data )
+#( X , Y ) = split_X_Y( data )
 LR = LinearRegression( Xtrain, Ytrain, Xvalidate , Yvalidate)
 LR.SetLearner(LRGradientLearner)
-LR.Learner.it = 10000
-LR.Learner.a = 0.0000002
+#LR.Learner.it = 1000
+#LR.Learner.a = 0.0013
 LR.Learner.Learn()
-
-print LR.Evaluate()
+#print LR.Evaluate()
 
 '''
 #(Train, Test ) = XV_LearningCurveN( X, Y, LR, 54, 3000)
