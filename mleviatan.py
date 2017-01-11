@@ -2,6 +2,7 @@ import numpy as np
 import math
 import matplotlib.pyplot as plt
 import sys
+import inspect
 
 # Debugging and Optimization
 def get_data_base(arr):
@@ -15,8 +16,8 @@ def get_data_base(arr):
     return base
 def is_same(x, y):
     return get_data_base(x) is get_data_base(y)
-def printp(i,it,TrainingError,ValidationError,running = True):
-    text = "Learning ({0} of {1}): T:{2} V:{3}".format( i+1 ,it,TrainingError,ValidationError)
+def printp(i,it,TrainError,ValidateError,running = True):
+    text = "Learning ({0} of {1}): T:{2} V:{3}".format( i+1 ,it,TrainError,ValidateError)
     if not running or i == 0:
         print text
     else:
@@ -186,6 +187,10 @@ class DefaultModeler(object):
     """Empty Modeler"""
     def __init__(self):
         pass
+class History(object):
+    """Empty Modeler"""
+    def __init__(self):
+        pass
 class ForwardPassPredictor(object):
     """Matrix multiplication predictor"""
     def __init__(self, parent = None ):
@@ -214,66 +219,107 @@ class LRGradientLearner(object):
     def __init__(self, parent = None ):
         self.parent = parent
         self.ErrFunction = Difference
-        self.Init_size = 1
+        self.Init_size = 1.0
         self.it = 1000
-        self.a = 0.1
-        self.Show = True
-        self.Convergence = 0.0000001
+        self.alpha = 0.0000000001
+
+        self.ShowProgress = True
+        self.RecordWeight = False
+        self.RecordGradient = False
+        self.RecordAlpha = False
+
         self.hasConstant = True
-    def Learn(self):
+        self.Convergence = 0.00000000001
 
-        self.HistT = np.zeros((self.it, 1))
-        self.HistV = np.zeros((self.it, 1))
-        Y = self.parent.Ytrain
-        Xtranspose = self.parent.Xtrain.transpose()
-        (n,_) = Xtranspose.shape
-        (_,o) = Y.shape
+    def Prepare(self):
+        # Declare Constants
+        self.Y = self.parent.Ytrain
+        self.Xtranspose = self.parent.Xtrain.transpose()
+        (n,_) = self.Xtranspose.shape
+        (_,o) = self.Y.shape
+
+        # Create Modeler
         self.parent.Modeler = DefaultModeler()
-
-
-        #Iniciar con ventaja
-        #if self.hasConstant: self.parent.Modeler.w[0,:] = Y.mean(axis = 0)
-
-        alpha = 0.00000000001
         self.parent.Modeler.w = np.array( np.random.random_sample((n, o)) ) * self.Init_size
-        if self.hasConstant: self.parent.Modeler.w[0,:] = Y.mean(axis = 0)
-        trialw = self.parent.Modeler.w
-        trialError = self.parent.EvaluateTrain()
-        trialA = self.ErrFunction(self.parent.TrainingPrediction,Y)
-        trialgradient = Xtranspose.dot(trialA)
-        for i in list(range(41)):
-            self.parent.Modeler.w = trialw + trialgradient * alpha
-            trialError1 = self.parent.EvaluateTrain()
-            trialError1 =  (trialError - trialError1) * 10
 
-            self.parent.Modeler.w = trialw + (trialgradient * (alpha * 10) )
-            trialError10 = self.parent.EvaluateTrain()
-            trialError10 =  (trialError - trialError10)
+        # Create History variables
+        self.History = History()
+        self.History.TrainError = []
+        self.History.ValidateError = []
+        if self.RecordWeight: self.History.w = []
+        if self.RecordGradient: self.History.gradient = []
+        if self.RecordAlpha: self.History.alpha = []
 
-            trialRate = trialError10/abs(trialError1)
-            #print i , alpha , trialRate
-            if trialRate <= 0 :
-                self.a = alpha
-                print "Learning Rate:", alpha
+        # Start with advantage
+        self.Advantage()
+    def Advantage(self):
+        if self.hasConstant: self.parent.Modeler.w[0,:] = self.Y.mean(axis = 0)
+    def findAlpha(self , trialw ):
+        steps = 3;
+        self.Descent()
+        trialError = self.parent.TrainError
+        for i in list(range(1000)):
+            self.parent.Modeler.w = trialw
+            self.Update()
+            trialError1 =  (trialError - self.parent.EvaluateTrain() ) * steps
+
+            self.parent.Modeler.w = trialw
+            self.Update( self.alpha * steps )
+            trialError10 =  (trialError - self.parent.EvaluateTrain())
+
+            trialRate = ( trialError10 / abs(trialError1) )
+
+            if trialRate > 0 :
+                #print i , self.alpha , trialRate
+                self.alpha = self.alpha * 1.1
+            else:
+                if self.ShowProgress:
+                    print "Learning Rate:", self.alpha
                 break
-            alpha = alpha * 2
-
         self.parent.Modeler.w = trialw
+
+    def Learn(self):
+        # Prepare Variables
+        self.Prepare()
+        trialw = self.parent.Modeler.w
+
+        self.findAlpha( trialw )
+
+        #Main Iterator
         for i in list(range(self.it)):
-            self.HistT[i] = self.parent.EvaluateTrain()
-            self.HistV[i] = self.parent.EvaluateValidate()
-            A = self.ErrFunction(self.parent.TrainingPrediction,Y)
-            self.gradient = ( Xtranspose.dot(A) * self.a)
-            self.parent.Modeler.w = self.parent.Modeler.w + self.gradient
+            self.Descent()
+            self.Update()
+            self.RecordProgress(i, running = True )
 
-            if self.Show: printp( i, self.it, self.HistT[i] ,self.HistV[i] , True )
-
-
+            # Check for Convergence
             if i > 1 :
-                Improvement = -((self.HistT[i] / self.HistT[i-1]) - 1)
+                Improvement = -( (self.History.TrainError[i] / self.History.TrainError[i-1]) - 1 )
                 if self.Convergence > Improvement : break
+        print ""
         return self.parent.Modeler
 
+    def Descent(self):
+        self.parent.EvaluateTrain()
+        self.parent.EvaluateValidate()
+        self.A = self.ErrFunction(self.parent.TrainingPrediction,self.Y)
+        self.gradient = self.Xtranspose.dot(self.A)
+        return self.gradient
+    def Update(self, alpha = None , gradient = None ):
+        if gradient is None: gradient = self.gradient
+        if alpha is None: alpha = self.alpha
+        Update = (gradient * alpha)
+        self.parent.Modeler.w = self.parent.Modeler.w + Update
+        return Update
+    def RecordProgress(self,i, running = True):
+        self.History.TrainError.append(self.parent.TrainError)
+        self.History.ValidateError.append(self.parent.ValidateError)
+
+        if self.RecordWeight: self.History.w.append( np.copy(self.parent.Modeler.w) )
+        if self.RecordGradient: self.History.gradient.append( np.copy(self.gradient) )
+        if self.RecordAlpha: self.History.alpha.append( np.copy(self.alpha) )
+
+        if self.ShowProgress:
+            printp( i, self.it, self.History.TrainError[i] , self.History.ValidateError[i] , running )
 
 # Machine Learning Algorithms Classes
 # np.concatenate( (Train,Test) , axis=1)
@@ -315,7 +361,11 @@ class DefaultML(object):
         print "Learning setup:\n" , self.GetLearning()
 
     def SetLearner(self,LearnerObject):
-        self.Learner = LearnerObject(self)
+        if inspect.isclass(LearnerObject):
+            self.Learner = LearnerObject(self)
+        else:
+            self.Learner = LearnerObject
+            self.Learner.parent = self    
     def SetModeler(self,ModelerObject):
         self.Modeler = ModelerObject
     def SetPredictor(self,PredictorObject):
@@ -393,10 +443,14 @@ Xvalidate = add_constant(Xvalidate)
 #LR Example
 #( X , Y ) = split_X_Y( data )
 LR = LinearRegression( Xtrain, Ytrain, Xvalidate , Yvalidate)
-LR.SetLearner(LRGradientLearner)
-#LR.Learner.it = 1000
-#LR.Learner.a = 0.0013
+
+Learner1 = LRGradientLearner()
+Learner1.ShowProgress = True
+
+LR.SetLearner( Learner1 )
+
 LR.Learner.Learn()
+
 #print LR.Evaluate()
 
 '''
