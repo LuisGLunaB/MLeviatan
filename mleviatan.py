@@ -17,11 +17,14 @@ def get_data_base(arr):
 def is_same(x, y):
     return get_data_base(x) is get_data_base(y)
 def printp(i,it,TrainError,ValidateError,running = True):
-    text = "Learning ({0} of {1}): T:{2} V:{3}".format( i+1 ,it,TrainError,ValidateError)
+    text = "Learning ({0} of {1}): T:{2} V:{3}".format( i ,it,TrainError,ValidateError)
     if not running or i == 0:
         print text
     else:
         print "\r" , text ,
+def sshape(X):
+    (m,n) = X.shape
+    print m , n
 
 # Data Wrangling and Preparation
 def split_X_Y( data , n = 1 ):
@@ -173,6 +176,12 @@ def Normalize(X, mean = None, std = None):
     deviation = X - mean
     return ( np.divide(deviation,std) , mean , std )
 
+# Activation Functions
+def linearActivation(X):
+    return X
+def sigmoidActivation(X):
+    return 1 / (1 + np.exp(-X) )
+
 # Error Functions
 def MAD(P,Y):
     return np.mean(np.absolute(P-Y))
@@ -195,9 +204,16 @@ class ForwardPassPredictor(object):
     """Matrix multiplication predictor"""
     def __init__(self, parent = None ):
         self.parent = parent
+        self.activation = linearActivation
     def Predict(self,X = None):
         if X is None: X = self.parent.Xtrain
-        Prediction = X.dot(self.parent.Modeler.w)
+        w = self.parent.Modeler.w
+
+        Prediction = X.dot(w)
+
+        if self.activation != linearActivation:
+            Prediction = self.activation(Prediction)
+
         return Prediction
 class NormalEquationLearner(object):
     """Normal Equation Learner for Linear Regression"""
@@ -219,8 +235,7 @@ class LRGradientLearner(object):
     def __init__(self, parent = None ):
         self.parent = parent
         self.ErrFunction = Difference
-        self.Init_size = 1.0
-        self.it = 1000
+        self.Init_size = 1
         self.alpha = 0.0000000001
 
         self.ShowProgress = True
@@ -229,7 +244,10 @@ class LRGradientLearner(object):
         self.RecordAlpha = False
 
         self.hasConstant = True
-        self.Convergence = 0.00000000001
+
+        self.it = 2000
+        if self.it is not None:
+            self.Convergence = 0.000000000001
 
     def Prepare(self):
         # Declare Constants
@@ -240,7 +258,7 @@ class LRGradientLearner(object):
 
         # Create Modeler
         self.parent.Modeler = DefaultModeler()
-        self.parent.Modeler.w = np.array( np.random.random_sample((n, o)) ) * self.Init_size
+        self.parent.Modeler.w = np.array( np.random.random_sample( (n,o) )) * 2 - 1
 
         # Create History variables
         self.History = History()
@@ -253,12 +271,15 @@ class LRGradientLearner(object):
         # Start with advantage
         self.Advantage()
     def Advantage(self):
-        if self.hasConstant: self.parent.Modeler.w[0,:] = self.Y.mean(axis = 0)
+        self.parent.Modeler.w = self.parent.Modeler.w * self.Init_size
+        if self.hasConstant:
+            self.parent.Modeler.w[0,:] = self.Y.mean(axis = 0)
+
     def findAlpha(self , trialw ):
-        steps = 3;
+        steps = 6;
         self.Descent()
         trialError = self.parent.TrainError
-        for i in list(range(1000)):
+        for i in list(range(300)):
             self.parent.Modeler.w = trialw
             self.Update()
             trialError1 =  (trialError - self.parent.EvaluateTrain() ) * steps
@@ -278,23 +299,42 @@ class LRGradientLearner(object):
                 break
         self.parent.Modeler.w = trialw
 
+    def Momentum(self, increase = 0.03 , decrease = 0.3, alpha = None, currentGradient = None, previousGradient = None ):
+        if previousGradient is None: previousGradient = self.previousGradient
+        if currentGradient is None: currentGradient = self.gradient
+        if alpha is None: alpha = self.alpha
+
+        product = currentGradient * previousGradient
+        selection = product > 0.0
+        adition = (selection * alpha) * increase
+        substraction = (-selection * alpha) * decrease
+        self.alpha = alpha + adition - substraction
+        #print self.alpha
+        return self.alpha
+
     def Learn(self):
         # Prepare Variables
         self.Prepare()
         trialw = self.parent.Modeler.w
 
         self.findAlpha( trialw )
-
         #Main Iterator
-        for i in list(range(self.it)):
+        i = 0
+        while True:
+            self.previousGradient = self.gradient
             self.Descent()
+            self.Momentum()
             self.Update()
+
             self.RecordProgress(i, running = True )
 
             # Check for Convergence
-            if i > 1 :
+            if self.it is not None:
+                if i >= self.it : break
+            elif i > 1 :
                 Improvement = -( (self.History.TrainError[i] / self.History.TrainError[i-1]) - 1 )
                 if self.Convergence > Improvement : break
+            i = i + 1
         print ""
         return self.parent.Modeler
 
@@ -365,7 +405,7 @@ class DefaultML(object):
             self.Learner = LearnerObject(self)
         else:
             self.Learner = LearnerObject
-            self.Learner.parent = self    
+            self.Learner.parent = self
     def SetModeler(self,ModelerObject):
         self.Modeler = ModelerObject
     def SetPredictor(self,PredictorObject):
@@ -430,9 +470,10 @@ class LinearRegression(DefaultML):
 #np.random.shuffle(data)
 #Prepare Data
 data = np.genfromtxt('casas.csv',delimiter=',')
+
 ( Dtrain , Dvalidate , Itrain , Ivalidate ) = split_holdout(data)
-( Xtrain , Ytrain ) = split_X_Y( Dtrain )
-( Xvalidate , Yvalidate ) = split_X_Y( Dvalidate )
+( Xtrain , Ytrain ) = split_X_Y( Dtrain , n=1 )
+( Xvalidate , Yvalidate ) = split_X_Y( Dvalidate, n=1 )
 
 #Normalize
 (Xtrain, mean , std ) = Normalize(Xtrain)
@@ -440,15 +481,20 @@ data = np.genfromtxt('casas.csv',delimiter=',')
 Xtrain = add_constant(Xtrain)
 Xvalidate = add_constant(Xvalidate)
 
+#Xtrain = (Xtrain -33.4) / 100
+#Xvalidate = (Xvalidate -33.4) / 100
+
 #LR Example
 #( X , Y ) = split_X_Y( data )
-LR = LinearRegression( Xtrain, Ytrain, Xvalidate , Yvalidate)
+LR = LinearRegression( Xtrain, Ytrain , Xvalidate , Yvalidate )
+
+#LR.Predictor.activation = sigmoidActivation
 
 Learner1 = LRGradientLearner()
 Learner1.ShowProgress = True
+Learner1.it = None
 
 LR.SetLearner( Learner1 )
-
 LR.Learner.Learn()
 
 #print LR.Evaluate()
