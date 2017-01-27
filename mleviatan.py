@@ -1,4 +1,5 @@
 import numpy as np
+import scipy as sp
 import math
 import matplotlib.pyplot as plt
 import sys
@@ -175,12 +176,33 @@ def Normalize(X, mean = None, std = None):
     if std  is None: std = X.std(axis = 0)
     deviation = X - mean
     return ( np.divide(deviation,std) , mean , std )
+def NormalizeOne(X, mini = None, maxi = None):
+    if maxi is None: maxi = X.max(axis = 0)
+    if mini  is None: mini = X.min(axis = 0)
+    diff = maxi - mini
+    deviation = X - mini
+    return ( np.divide(deviation,diff) , mini , maxi )
 
 # Activation Functions
+def inverse(f):
+    if f == linearActivation: inv = linearActivation
+    if f == sigmoidActivation: inv = logit
+    return inv
+def inverseData(f,X):
+    inv = inverse(f)
+    if inv != linearActivation:
+        X = inv(X)
+    return X
 def linearActivation(X):
     return X
 def sigmoidActivation(X):
-    return 1 / (1 + np.exp(-X) )
+    np.seterr(over='ignore')
+    R = 1 / (1 + np.exp(-X) )
+    np.seterr(over='warn')
+    return R
+def logit(X):
+    R = ( np.log(X) - np.log(1-X) )
+    return R
 
 # Error Functions
 def MAD(P,Y):
@@ -189,6 +211,12 @@ def MSE(P,Y):
     return np.mean(np.square(P-Y))
 def RMSE(P,Y):
     return ( MSE(P,Y) ) ** 0.5
+def LogLoss(P,Y):
+    epsilon = 0.000000001
+    P = np.maximum(epsilon,P)
+    P = np.minimum(1-epsilon,P)
+    LL = Y * np.log(P)
+    return -(LL.mean())
 def Difference(P,Y):
     return (Y-P)
 
@@ -235,8 +263,8 @@ class LRGradientLearner(object):
     def __init__(self, parent = None ):
         self.parent = parent
         self.ErrFunction = Difference
-        self.Init_size = 1
-        self.alpha = 0.0000000001
+        self.Init_size = 0.05
+        self.alpha = 0.00000001
 
         self.ShowProgress = True
         self.RecordWeight = False
@@ -245,7 +273,7 @@ class LRGradientLearner(object):
 
         self.hasConstant = True
 
-        self.it = 2000
+        self.it = 500
         if self.it is not None:
             self.Convergence = 0.000000000001
 
@@ -258,7 +286,7 @@ class LRGradientLearner(object):
 
         # Create Modeler
         self.parent.Modeler = DefaultModeler()
-        self.parent.Modeler.w = np.array( np.random.random_sample( (n,o) )) * 2 - 1
+        self.parent.Modeler.w = np.array( np.random.random_sample( (n,o) ))*2-1
 
         # Create History variables
         self.History = History()
@@ -273,24 +301,32 @@ class LRGradientLearner(object):
     def Advantage(self):
         self.parent.Modeler.w = self.parent.Modeler.w * self.Init_size
         if self.hasConstant:
-            self.parent.Modeler.w[0,:] = self.Y.mean(axis = 0)
+            f = self.parent.Predictor.activation
+            averageY = self.Y.mean(axis = 0)
+            self.parent.Modeler.w[0,:] = inverseData( f , averageY )
 
-    def findAlpha(self , trialw ):
-        steps = 6;
+    def findAlpha(self , trialw, th = 0.5, steps = 3, baseFunc = MAD):
         self.Descent()
-        trialError = self.parent.TrainError
-        for i in list(range(300)):
+        baseError = baseFunc(self.parent.TrainingPrediction,self.parent.Ytrain)
+
+        for i in list(range(250)):
             self.parent.Modeler.w = trialw
             self.Update()
-            trialError1 =  (trialError - self.parent.EvaluateTrain() ) * steps
+            self.parent.PredictTrain()
+            trialError = baseFunc(self.parent.TrainingPrediction,self.parent.Ytrain)
+            trialError1 =  (baseError - trialError) * steps
 
             self.parent.Modeler.w = trialw
             self.Update( self.alpha * steps )
-            trialError10 =  (trialError - self.parent.EvaluateTrain())
+            self.parent.PredictTrain()
+            trialError = baseFunc(self.parent.TrainingPrediction,self.parent.Ytrain)
+            trialError10 =  (baseError - trialError)
+            #print trialError1 , trialError10
 
-            trialRate = ( trialError10 / abs(trialError1) )
+            trialRate = ( trialError10 / trialError1 )
+            #change = (previoustrialRate-trialRate)
 
-            if trialRate > 0 :
+            if (trialRate > th):
                 #print i , self.alpha , trialRate
                 self.alpha = self.alpha * 1.1
             else:
@@ -464,40 +500,19 @@ class LinearRegression(DefaultML):
         self.Alias = ""
         self.Modeler = None
         self.Learner = NormalEquationLearner(self)
+        self.Learner.ShowProgress = True
         self.Predictor = ForwardPassPredictor(self)
         self.ErrorFunction = RMSE
+class LogisticRegression(LinearRegression):
+    def __init__(self, Xtrain = None, Ytrain = None, Xvalidate = None, Yvalidate = None ):
+        """Logistic Regression Model"""
+        LinearRegression.__init__(self, Xtrain, Ytrain, Xvalidate, Yvalidate)
+        self.Name = "Logistic Regression Model"
+        self.Learner = LRGradientLearner(self)
+        self.Predictor.activation = sigmoidActivation
+        self.ErrorFunction = LogLoss
 
 #np.random.shuffle(data)
-#Prepare Data
-data = np.genfromtxt('casas.csv',delimiter=',')
-
-( Dtrain , Dvalidate , Itrain , Ivalidate ) = split_holdout(data)
-( Xtrain , Ytrain ) = split_X_Y( Dtrain , n=1 )
-( Xvalidate , Yvalidate ) = split_X_Y( Dvalidate, n=1 )
-
-#Normalize
-(Xtrain, mean , std ) = Normalize(Xtrain)
-(Xvalidate, _ , _ ) = Normalize(Xvalidate, mean, std)
-Xtrain = add_constant(Xtrain)
-Xvalidate = add_constant(Xvalidate)
-
-#Xtrain = (Xtrain -33.4) / 100
-#Xvalidate = (Xvalidate -33.4) / 100
-
-#LR Example
-#( X , Y ) = split_X_Y( data )
-LR = LinearRegression( Xtrain, Ytrain , Xvalidate , Yvalidate )
-
-#LR.Predictor.activation = sigmoidActivation
-
-Learner1 = LRGradientLearner()
-Learner1.ShowProgress = True
-Learner1.it = None
-
-LR.SetLearner( Learner1 )
-LR.Learner.Learn()
-
-#print LR.Evaluate()
 
 '''
 #(Train, Test ) = XV_LearningCurveN( X, Y, LR, 54, 3000)
