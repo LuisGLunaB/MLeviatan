@@ -3,7 +3,7 @@ import sys; sys.path.append('..')
 from mleviatan import *
 
 #Import Digits images (small)
-data = np.genfromtxt('../data/digits.csv',delimiter=',')
+data = np.genfromtxt('../data/digits-small.csv',delimiter=',')
 
 # Separate data in 2 blocks
 ( Dtrain , Dvalidate , Itrain , Ivalidate ) = split_holdout(data)

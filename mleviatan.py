@@ -6,6 +6,13 @@ import sys
 import inspect
 
 # Debugging and Optimization
+def times(X,w,constant = False):
+    if not constant:
+        R = np.dot(X,w)
+    else:
+        c = w[0,:]
+        R = np.dot(X,w[1:,:]) + c
+    return R
 def get_data_base(arr):
     '''
     For a given Numpy array, finds the
@@ -171,6 +178,8 @@ def add_constant(X):
 def rem_constant(X):
     return X[:,1:]
 
+def randomWeights(n,o, base = 1.0):
+    return (np.array( np.random.random_sample( (n,o) ))*2-1)*base
 def Normalize(X, mean = None, std = None):
     if mean is None: mean = X.mean(axis = 0)
     if std  is None: std = X.std(axis = 0)
@@ -186,8 +195,14 @@ def NormalizeOne(X, mini = None, maxi = None):
 # Activation Functions
 def inverse(f):
     if f == linearActivation: inv = linearActivation
-    if f == sigmoidActivation: inv = logit
+    if f == sigmoidActivation: inv = sigmoidInverse
     return inv
+def derivative(f):
+    if f == linearActivation: der = linearActivation
+    if f == sigmoidActivation: der = sigmoidDerivative
+    if f == RectifierActivation: der = RectifierDerivative
+    if f == tanhActivation: der = tanhDerivative
+    return der
 def inverseData(f,X):
     inv = inverse(f)
     if inv != linearActivation:
@@ -195,15 +210,30 @@ def inverseData(f,X):
     return X
 def linearActivation(X):
     return X
+def RectifierActivation(X):
+    R = np.log( np.exp(X)+1 )
+    return R
+def RectifierDerivative(X):
+    return sigmoidActivation(X)
 def sigmoidActivation(X):
     np.seterr(over='ignore')
     R = 1 / (1 + np.exp(-X) )
     np.seterr(over='warn')
     return R
+def sigmoidDerivative(Z):
+    s = sigmoidActivation(Z)
+    return (s)*(1-s)
+def sigmoidInverse(X):
+    R = ( safelog(X) - safelog(1-X) )
+    return R
 def logit(X):
-    R = ( np.log(X) - np.log(1-X) )
+    R = ( safelog(X) - safelog(1-X) )
     return R
 
+def tanhActivation(X):
+    return np.tanh(X)
+def tanhDerivative(X):
+    return (1-tanhActivation(X))
 # Error Functions
 def MAD(P,Y):
     return np.mean(np.absolute(P-Y))
@@ -212,13 +242,14 @@ def MSE(P,Y):
 def RMSE(P,Y):
     return ( MSE(P,Y) ) ** 0.5
 def LogLoss(P,Y):
-    epsilon = 0.000000001
-    P = np.maximum(epsilon,P)
-    P = np.minimum(1-epsilon,P)
-    LL = Y * np.log(P)
-    return -(LL.mean())
+    LL = Y * safelog(P)
+    return -( LL.mean() )
 def Difference(P,Y):
     return (Y-P)
+def safelog(X, minval=0.00000001):
+    maxval = 1 - minval
+    R = np.log( np.clip(X,minval,maxval) )
+    return R
 
 class DefaultModeler(object):
     """Empty Modeler"""
@@ -259,7 +290,7 @@ class NormalEquationLearner(object):
         Modeler.w = self.w
         return Modeler
 class LRGradientLearner(object):
-    """Normal Equation Learner for Linear Regression"""
+    """Gradient Descent for Regression"""
     def __init__(self, parent = None ):
         self.parent = parent
         self.ErrFunction = Difference
@@ -287,6 +318,7 @@ class LRGradientLearner(object):
         # Create Modeler
         self.parent.Modeler = DefaultModeler()
         self.parent.Modeler.w = np.array( np.random.random_sample( (n,o) ))*2-1
+        self.parent.Modeler.w = self.parent.Modeler.w * self.Init_size
 
         # Create History variables
         self.History = History()
@@ -299,7 +331,7 @@ class LRGradientLearner(object):
         # Start with advantage
         self.Advantage()
     def Advantage(self):
-        self.parent.Modeler.w = self.parent.Modeler.w * self.Init_size
+
         if self.hasConstant:
             f = self.parent.Predictor.activation
             averageY = self.Y.mean(axis = 0)
@@ -375,8 +407,11 @@ class LRGradientLearner(object):
         return self.parent.Modeler
 
     def Descent(self):
-        self.parent.EvaluateTrain()
         self.parent.EvaluateValidate()
+        self.parent.EvaluateTrain()
+        self.gradient = self.Gradient()
+        return self.gradient
+    def Gradient(self):
         self.A = self.ErrFunction(self.parent.TrainingPrediction,self.Y)
         self.gradient = self.Xtranspose.dot(self.A)
         return self.gradient
@@ -390,12 +425,86 @@ class LRGradientLearner(object):
         self.History.TrainError.append(self.parent.TrainError)
         self.History.ValidateError.append(self.parent.ValidateError)
 
-        if self.RecordWeight: self.History.w.append( np.copy(self.parent.Modeler.w) )
-        if self.RecordGradient: self.History.gradient.append( np.copy(self.gradient) )
-        if self.RecordAlpha: self.History.alpha.append( np.copy(self.alpha) )
+        if self.RecordWeight: self.History.w.append( self.parent.Modeler.w )
+        if self.RecordGradient: self.History.gradient.append( self.gradient )
+        if self.RecordAlpha: self.History.alpha.append( self.alpha )
 
         if self.ShowProgress:
             printp( i, self.it, self.History.TrainError[i] , self.History.ValidateError[i] , running )
+class NNGradientLearner(LRGradientLearner):
+    """Gradient Descent for Neural Networks"""
+    def __init__(self,parent = None):
+        LRGradientLearner.__init__(self, parent )
+        self.alpha = 0.00000001
+        self.Init_size = 0.1
+        self.gradient = {}
+        self.d = {}
+        self.hasConstant = False
+    def Prepare(self):
+        L = self.parent.Layers
+        self.parent.RandomRestart(self.Init_size)
+        # Create History variables
+        self.History = History()
+        self.History.TrainError = []
+        self.History.ValidateError = []
+        if self.RecordWeight: self.History.w = []
+        if self.RecordGradient: self.History.gradient = []
+        if self.RecordAlpha: self.History.alpha = []
+
+        # Start with advantage
+        self.Advantage()
+    def Advantage(self):
+        L = self.parent.Layers
+        if self.hasConstant:
+            f = self.parent.Modeler.activation[L-2]
+            averageY = self.parent.Ytrain.mean(axis = 0)
+            self.parent.Modeler.w[L-2][0,:] = inverseData( f , averageY )
+
+    def Gradient(self):
+        L = self.parent.Layers
+        self.A = self.ErrFunction(self.parent.TrainingPrediction,self.parent.Ytrain)
+        BackProp = self.A
+        for l in list(range(L-1,0,-1)): #[2,1]
+            derive = derivative(self.parent.Modeler.activation[l-1])
+            self.d[l] = derive( self.parent.Hidden[l] ) * BackProp
+
+            self.gradient[l-1] = np.transpose(self.parent.Hidden[l-1]).dot(self.d[l])
+            if l > 1: BackProp = self.d[l].dot( np.transpose(self.parent.Modeler.w[l-1]) )
+        #self.gradient = self.Xtranspose.dot(self.A)
+        return self.gradient
+    def Update(self, alpha = None , gradient = None ):
+        #print self.parent.Modeler.w[1]
+        L = self.parent.Layers
+        Update = {}
+        if gradient is None: gradient = self.gradient
+        if alpha is None: alpha = self.alpha
+        for l in list(range(L-1)):
+            Update[l] = (gradient[l] * alpha)
+            self.parent.Modeler.w[l] = self.parent.Modeler.w[l] + Update[l]
+        return Update
+    def Learn(self):
+        self.Prepare()
+
+        i = 0
+        while True:
+            self.previousGradient = self.gradient
+            self.Descent()
+            #self.Momentum()
+            self.Update()
+
+            self.RecordProgress(i, running = True )
+            # Check for Convergence
+            if self.it is not None:
+                if i >= self.it : break
+            elif i > 1 :
+                Improvement = -( (self.History.TrainError[i] / self.History.TrainError[i-1]) - 1 )
+                if self.Convergence > Improvement : break
+            i = i + 1
+
+            #print self.parent.PreHidden[1].std()
+
+        print ""
+        return self.parent.Modeler
 
 # Machine Learning Algorithms Classes
 # np.concatenate( (Train,Test) , axis=1)
@@ -512,7 +621,83 @@ class LogisticRegression(LinearRegression):
         self.Predictor.activation = sigmoidActivation
         self.ErrorFunction = LogLoss
 
-#np.random.shuffle(data)
+class FFPredictor(object):
+    """Neural Network FeedForward"""
+    def __init__(self, parent = None ):
+        self.parent = parent
+        self.L = self.parent.Layers
+        for l in list(range(self.L-1)):
+            self.parent.Modeler.activation[l] = sigmoidActivation
+        self.parent.Modeler.activation[0] = tanhActivation
+    def Predict(self,X = None):
+        if X is None: X = self.parent.Xtrain
+        self.parent.Hidden[0] = X
+        self.parent.PreHidden[0] = X
+        w = self.parent.Modeler.w
+        for l in list(range(self.L-1)):
+            data = self.parent.Hidden[l]
+            weight = w[l]
+            self.parent.PreHidden[l+1] = data.dot(weight)
+            if self.parent.Modeler.activation[l] == linearActivation:
+                self.parent.Hidden[l+1] = self.parent.PreHidden[l+1]
+            else:
+                self.parent.Hidden[l+1] = self.parent.Modeler.activation[l]( self.parent.PreHidden[l+1] )
+        Prediction = self.parent.Hidden[self.L-1]
+        return Prediction
+
+class NeuralNetwork(DefaultML):
+    def __init__(self, Xtrain = None, Ytrain = None, Xvalidate = None, Yvalidate = None ):
+        """Feed Forward Neural Network Model"""
+        DefaultML.__init__(self, Xtrain, Ytrain, Xvalidate, Yvalidate)
+        self.Name = "Feed Forward Neural Network Model"
+        self.Alias = ""
+
+        self.Modeler = DefaultModeler()
+        self.Modeler.w = {}
+        self.Modeler.Units = {}
+        self.Modeler.activation = {}
+
+        self.ErrorFunction = LogLoss
+        self.Layers = 3
+        self.Predictor = FFPredictor(self)
+        self.Units = {}
+
+        self.PreHidden = {}
+        self.PreHidden[0] = self.Xtrain
+        self.Hidden = {}
+        self.Hidden[0] = self.Xtrain
+
+        self.Learner = NNGradientLearner(self)
+        self.Learner.ShowProgress = True
+
+    def RandomRestart(self, base = 1.0 ):
+        #( _ ,self.Units[0]) = self.Xtrain.shape
+        #( _ ,self.Units[self.Layers+1]) = self.Ytrain.shape
+        self.Modeler.w = {}
+        for l in list(range(self.Layers-1)):
+            self.Modeler.w[l] = randomWeights(self.Modeler.Units[l],self.Modeler.Units[l+1], base )
+
+#Import Digits images (small)
+data = np.genfromtxt('./data/digits-small.csv',delimiter=',')
+
+# Separate data in 2 blocks
+( Dtrain , Dvalidate , Itrain , Ivalidate ) = split_holdout(data)
+# Separte X from Y
+( Xtrain , Ytrain ) = split_X_Y( Dtrain , n=10 )
+( Xvalidate , Yvalidate ) = split_X_Y( Dvalidate, n=10 )
+# Normalize Images and Add Constant
+(Xtrain, mean , std ) = NormalizeOne(Xtrain, 0, 255)
+(Xvalidate, _ , _ ) = NormalizeOne(Xvalidate, 0, 255)
+Xtrain = add_constant(Xtrain)
+Xvalidate = add_constant(Xvalidate)
+
+# Create ML Object
+NN = NeuralNetwork( Xtrain, Ytrain , Xvalidate , Yvalidate )
+NN.Modeler.Units = [785,30,10]
+NN.Learner.alpha = 0.0001
+NN.Learner.it = 4000
+NN.Learner.Learn()
+
 
 '''
 #(Train, Test ) = XV_LearningCurveN( X, Y, LR, 54, 3000)
