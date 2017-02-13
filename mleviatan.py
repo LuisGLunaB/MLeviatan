@@ -200,7 +200,7 @@ def inverse(f):
 def derivative(f):
     if f == linearActivation: der = linearActivation
     if f == sigmoidActivation: der = sigmoidDerivative
-    if f == RectifierActivation: der = RectifierDerivative
+    if f == rectifierActivation: der = rectifierDerivative
     if f == tanhActivation: der = tanhDerivative
     return der
 def inverseData(f,X):
@@ -210,10 +210,12 @@ def inverseData(f,X):
     return X
 def linearActivation(X):
     return X
-def RectifierActivation(X):
+def rectifierActivation(X):
+    np.seterr(over='ignore')
     R = np.log( np.exp(X)+1 )
+    np.seterr(over='warn')
     return R
-def RectifierDerivative(X):
+def rectifierDerivative(X):
     return sigmoidActivation(X)
 def sigmoidActivation(X):
     np.seterr(over='ignore')
@@ -224,16 +226,20 @@ def sigmoidDerivative(Z):
     s = sigmoidActivation(Z)
     return (s)*(1-s)
 def sigmoidInverse(X):
-    R = ( safelog(X) - safelog(1-X) )
+    R = ( np.log(X) - np.log(1-X) )
     return R
-def logit(X):
-    R = ( safelog(X) - safelog(1-X) )
-    return R
-
 def tanhActivation(X):
     return np.tanh(X)
 def tanhDerivative(X):
     return (1-tanhActivation(X))
+def logit(X):
+    R = ( np.log(X) - np.log(1-X) )
+    return R
+def safelog(X, minval=0.0000001):
+    maxval = (1 - minval)
+    R = np.log( np.clip(X,minval,maxval) )
+    return R
+
 # Error Functions
 def MAD(P,Y):
     return np.mean(np.absolute(P-Y))
@@ -241,15 +247,15 @@ def MSE(P,Y):
     return np.mean(np.square(P-Y))
 def RMSE(P,Y):
     return ( MSE(P,Y) ) ** 0.5
+def Accuracy(P,Y):
+    R = ( (P>0.5) == Y )
+    return -round(R.mean(),5)*100.0
 def LogLoss(P,Y):
     LL = Y * safelog(P)
     return -( LL.mean() )
 def Difference(P,Y):
     return (Y-P)
-def safelog(X, minval=0.00000001):
-    maxval = 1 - minval
-    R = np.log( np.clip(X,minval,maxval) )
-    return R
+
 
 class DefaultModeler(object):
     """Empty Modeler"""
@@ -304,6 +310,10 @@ class LRGradientLearner(object):
 
         self.hasConstant = True
 
+        self.hasMomentum = True
+        self.increase = 0.03
+        self.decrease = 0.3
+
         self.it = 500
         if self.it is not None:
             self.Convergence = 0.000000000001
@@ -331,13 +341,12 @@ class LRGradientLearner(object):
         # Start with advantage
         self.Advantage()
     def Advantage(self):
-
         if self.hasConstant:
             f = self.parent.Predictor.activation
             averageY = self.Y.mean(axis = 0)
             self.parent.Modeler.w[0,:] = inverseData( f , averageY )
 
-    def findAlpha(self , trialw, th = 0.5, steps = 3, baseFunc = MAD):
+    def findAlpha(self, trialw, th = 0.5, steps = 3, baseFunc = MAD):
         self.Descent()
         baseError = baseFunc(self.parent.TrainingPrediction,self.parent.Ytrain)
 
@@ -367,11 +376,12 @@ class LRGradientLearner(object):
                 break
         self.parent.Modeler.w = trialw
 
-    def Momentum(self, increase = 0.03 , decrease = 0.3, alpha = None, currentGradient = None, previousGradient = None ):
+    def Momentum(self, alpha = None, currentGradient = None, previousGradient = None ):
         if previousGradient is None: previousGradient = self.previousGradient
         if currentGradient is None: currentGradient = self.gradient
         if alpha is None: alpha = self.alpha
-
+        increase = self.increase
+        decrease = self.decrease
         product = currentGradient * previousGradient
         selection = product > 0.0
         adition = (selection * alpha) * increase
@@ -391,7 +401,7 @@ class LRGradientLearner(object):
         while True:
             self.previousGradient = self.gradient
             self.Descent()
-            self.Momentum()
+            if self.hasMomentum: self.Momentum()
             self.Update()
 
             self.RecordProgress(i, running = True )
@@ -431,80 +441,6 @@ class LRGradientLearner(object):
 
         if self.ShowProgress:
             printp( i, self.it, self.History.TrainError[i] , self.History.ValidateError[i] , running )
-class NNGradientLearner(LRGradientLearner):
-    """Gradient Descent for Neural Networks"""
-    def __init__(self,parent = None):
-        LRGradientLearner.__init__(self, parent )
-        self.alpha = 0.00000001
-        self.Init_size = 0.1
-        self.gradient = {}
-        self.d = {}
-        self.hasConstant = False
-    def Prepare(self):
-        L = self.parent.Layers
-        self.parent.RandomRestart(self.Init_size)
-        # Create History variables
-        self.History = History()
-        self.History.TrainError = []
-        self.History.ValidateError = []
-        if self.RecordWeight: self.History.w = []
-        if self.RecordGradient: self.History.gradient = []
-        if self.RecordAlpha: self.History.alpha = []
-
-        # Start with advantage
-        self.Advantage()
-    def Advantage(self):
-        L = self.parent.Layers
-        if self.hasConstant:
-            f = self.parent.Modeler.activation[L-2]
-            averageY = self.parent.Ytrain.mean(axis = 0)
-            self.parent.Modeler.w[L-2][0,:] = inverseData( f , averageY )
-
-    def Gradient(self):
-        L = self.parent.Layers
-        self.A = self.ErrFunction(self.parent.TrainingPrediction,self.parent.Ytrain)
-        BackProp = self.A
-        for l in list(range(L-1,0,-1)): #[2,1]
-            derive = derivative(self.parent.Modeler.activation[l-1])
-            self.d[l] = derive( self.parent.Hidden[l] ) * BackProp
-
-            self.gradient[l-1] = np.transpose(self.parent.Hidden[l-1]).dot(self.d[l])
-            if l > 1: BackProp = self.d[l].dot( np.transpose(self.parent.Modeler.w[l-1]) )
-        #self.gradient = self.Xtranspose.dot(self.A)
-        return self.gradient
-    def Update(self, alpha = None , gradient = None ):
-        #print self.parent.Modeler.w[1]
-        L = self.parent.Layers
-        Update = {}
-        if gradient is None: gradient = self.gradient
-        if alpha is None: alpha = self.alpha
-        for l in list(range(L-1)):
-            Update[l] = (gradient[l] * alpha)
-            self.parent.Modeler.w[l] = self.parent.Modeler.w[l] + Update[l]
-        return Update
-    def Learn(self):
-        self.Prepare()
-
-        i = 0
-        while True:
-            self.previousGradient = self.gradient
-            self.Descent()
-            #self.Momentum()
-            self.Update()
-
-            self.RecordProgress(i, running = True )
-            # Check for Convergence
-            if self.it is not None:
-                if i >= self.it : break
-            elif i > 1 :
-                Improvement = -( (self.History.TrainError[i] / self.History.TrainError[i-1]) - 1 )
-                if self.Convergence > Improvement : break
-            i = i + 1
-
-            #print self.parent.PreHidden[1].std()
-
-        print ""
-        return self.parent.Modeler
 
 # Machine Learning Algorithms Classes
 # np.concatenate( (Train,Test) , axis=1)
@@ -625,25 +561,126 @@ class FFPredictor(object):
     """Neural Network FeedForward"""
     def __init__(self, parent = None ):
         self.parent = parent
-        self.L = self.parent.Layers
-        for l in list(range(self.L-1)):
-            self.parent.Modeler.activation[l] = sigmoidActivation
-        self.parent.Modeler.activation[0] = tanhActivation
     def Predict(self,X = None):
         if X is None: X = self.parent.Xtrain
+        self.L = len(self.parent.Modeler.Units)
+
         self.parent.Hidden[0] = X
         self.parent.PreHidden[0] = X
         w = self.parent.Modeler.w
         for l in list(range(self.L-1)):
-            data = self.parent.Hidden[l]
             weight = w[l]
+            data = self.parent.Hidden[l]
             self.parent.PreHidden[l+1] = data.dot(weight)
             if self.parent.Modeler.activation[l] == linearActivation:
                 self.parent.Hidden[l+1] = self.parent.PreHidden[l+1]
             else:
                 self.parent.Hidden[l+1] = self.parent.Modeler.activation[l]( self.parent.PreHidden[l+1] )
         Prediction = self.parent.Hidden[self.L-1]
+
         return Prediction
+class NNGradientLearner(LRGradientLearner):
+    """Gradient Descent for Neural Networks"""
+    def __init__(self,parent = None):
+        LRGradientLearner.__init__(self, parent )
+        self.alpha = 0.00000001
+        self.Init_size = 0.1
+        self.gradient = {}
+        self.d = {}
+
+        self.hasMomentum = True
+        self.increase = 0.03
+        self.decrease = 0.3
+
+        self.hasConstant = False
+
+    def Prepare(self):
+        self.parent.Modeler.Units = self.Units
+        self.parent.Modeler.activation = self.activation
+
+        self.parent.RandomRestart(self.Init_size)
+        if not isinstance(self.alpha,list):
+            self.alpha = [self.alpha] * (len(self.Units)-1)
+
+        # Create History variables
+        self.History = History()
+        self.History.TrainError = []
+        self.History.ValidateError = []
+        if self.RecordWeight: self.History.w = []
+        if self.RecordGradient: self.History.gradient = []
+        if self.RecordAlpha: self.History.alpha = []
+
+        # Start with advantage
+        self.Advantage()
+    def Advantage(self):
+        L = len(self.parent.Modeler.Units)
+        if self.hasConstant:
+            f = self.parent.Modeler.activation[L-2]
+            averageY = self.parent.Ytrain.mean(axis = 0)
+            self.parent.Modeler.w[L-2][0,:] = inverseData( f , averageY )
+    def Momentum(self, alpha = None, currentGradient = None, previousGradient = None ):
+        L = len(self.parent.Modeler.Units)
+        if previousGradient is None: previousGradient = self.previousGradient
+        if currentGradient is None: currentGradient = self.gradient
+        if alpha is None: alpha = self.alpha
+        increase = self.increase
+        decrease = self.decrease
+        product = {}
+        selection = {}
+        addition = {}
+        substraction = {}
+        for l in list(range(L-1)):
+            product[l] = currentGradient[l] * previousGradient[l]
+            selection[l] = product[l] > 0.0
+            addition[l] = (selection[l] * alpha[l]) * increase
+            substraction[l] = (-selection[l] * alpha[l]) * decrease
+            self.alpha[l] = alpha[l] + addition[l] - substraction[l]
+
+        return self.alpha
+    def Gradient(self):
+        L = len(self.parent.Modeler.Units)
+        self.A = self.ErrFunction(self.parent.TrainingPrediction,self.parent.Ytrain)
+        BackProp = self.A
+        for l in list(range(L-1,0,-1)): #[2,1]
+            derive = derivative(self.parent.Modeler.activation[l-1])
+            self.d[l] = derive( self.parent.Hidden[l] ) * BackProp
+
+            self.gradient[l-1] = np.transpose(self.parent.Hidden[l-1]).dot(self.d[l])
+            if l > 1: BackProp = self.d[l].dot( np.transpose(self.parent.Modeler.w[l-1]) )
+        #self.gradient = self.Xtranspose.dot(self.A)
+        return self.gradient
+    def Update(self, alpha = None , gradient = None ):
+        #print self.parent.Modeler.w[1]
+        L = len(self.parent.Modeler.Units)
+        Update = {}
+        if gradient is None: gradient = self.gradient
+        if alpha is None: alpha = self.alpha
+        for l in list(range(L-1)):
+            Update[l] = (gradient[l] * alpha[l])
+            self.parent.Modeler.w[l] = self.parent.Modeler.w[l] + Update[l]
+        return Update
+    def Learn(self):
+        self.Prepare()
+        i = 0
+        while True:
+            self.previousGradient = self.gradient
+            self.Descent()
+            if self.hasMomentum: self.Momentum()
+            self.Update()
+
+            self.RecordProgress(i, running = True )
+            # Check for Convergence
+            if self.it is not None:
+                if i >= self.it : break
+            elif i > 1 :
+                Improvement = -( (self.History.TrainError[i] / self.History.TrainError[i-1]) - 1 )
+                if self.Convergence > Improvement : break
+            i = i + 1
+
+            #print self.parent.PreHidden[1].std()
+
+        print ""
+        return self.parent.Modeler
 
 class NeuralNetwork(DefaultML):
     def __init__(self, Xtrain = None, Ytrain = None, Xvalidate = None, Yvalidate = None ):
@@ -653,14 +690,12 @@ class NeuralNetwork(DefaultML):
         self.Alias = ""
 
         self.Modeler = DefaultModeler()
-        self.Modeler.w = {}
+        self.Modeler.w = None
         self.Modeler.Units = {}
         self.Modeler.activation = {}
 
         self.ErrorFunction = LogLoss
-        self.Layers = 3
         self.Predictor = FFPredictor(self)
-        self.Units = {}
 
         self.PreHidden = {}
         self.PreHidden[0] = self.Xtrain
@@ -669,35 +704,13 @@ class NeuralNetwork(DefaultML):
 
         self.Learner = NNGradientLearner(self)
         self.Learner.ShowProgress = True
-
+        self.Learner.activation = self.Modeler.activation
     def RandomRestart(self, base = 1.0 ):
         #( _ ,self.Units[0]) = self.Xtrain.shape
         #( _ ,self.Units[self.Layers+1]) = self.Ytrain.shape
         self.Modeler.w = {}
-        for l in list(range(self.Layers-1)):
+        for l in list(range( len(self.Modeler.Units) -1)):
             self.Modeler.w[l] = randomWeights(self.Modeler.Units[l],self.Modeler.Units[l+1], base )
-
-#Import Digits images (small)
-data = np.genfromtxt('./data/digits-small.csv',delimiter=',')
-
-# Separate data in 2 blocks
-( Dtrain , Dvalidate , Itrain , Ivalidate ) = split_holdout(data)
-# Separte X from Y
-( Xtrain , Ytrain ) = split_X_Y( Dtrain , n=10 )
-( Xvalidate , Yvalidate ) = split_X_Y( Dvalidate, n=10 )
-# Normalize Images and Add Constant
-(Xtrain, mean , std ) = NormalizeOne(Xtrain, 0, 255)
-(Xvalidate, _ , _ ) = NormalizeOne(Xvalidate, 0, 255)
-Xtrain = add_constant(Xtrain)
-Xvalidate = add_constant(Xvalidate)
-
-# Create ML Object
-NN = NeuralNetwork( Xtrain, Ytrain , Xvalidate , Yvalidate )
-NN.Modeler.Units = [785,30,10]
-NN.Learner.alpha = 0.0001
-NN.Learner.it = 4000
-NN.Learner.Learn()
-
 
 '''
 #(Train, Test ) = XV_LearningCurveN( X, Y, LR, 54, 3000)

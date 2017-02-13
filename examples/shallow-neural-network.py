@@ -17,15 +17,17 @@ Xtrain = add_constant(Xtrain)
 Xvalidate = add_constant(Xvalidate)
 
 # Create ML Object
-LR = LogisticRegression( Xtrain, Ytrain , Xvalidate , Yvalidate )
-# Set Learning parameters
-LR.Learner.it = 2000
-LR.Learner.alpha = 0.00001
+NN = NeuralNetwork( Xtrain, Ytrain , Xvalidate , Yvalidate )
 
-LR.Learner.hasConstant = False # Start with advantage?
-LR.Learner.hasMomentum = False
-LR.Learner.increase = 0.005
-LR.Learner.decrease = 0.60
+NN.ErrorFunction = LogLoss
+NN.Learner.activation = [ sigmoidActivation, rectifierActivation, sigmoidActivation]
+NN.Learner.it = 10000
+NN.Learner.alpha = 0.0001
+NN.Learner.Units = [785,50,20,10]
 
-# Learn
-LR.Learner.Learn()
+NN.Learner.hasMomentum = True
+NN.Learner.increase = 0.0005
+NN.Learner.decrease = 0.005
+
+NN.RandomRestart()
+NN.Learner.Learn()
